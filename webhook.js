@@ -3,16 +3,13 @@ import { google } from 'googleapis';
 
 /* ================== ENV ================== */
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const GROUP_ID = process.env.GROUP_ID;
+const GROUP_ID = process.env.IT_CHAT_ID; // ← ВАЖНО
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 const SHEET_NAME = process.env.SHEET_NAME;
 const GOOGLE_CLIENT_EMAIL = process.env.GOOGLE_CLIENT_EMAIL;
 const GOOGLE_PRIVATE_KEY = process.env.GOOGLE_PRIVATE_KEY
   ? process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n')
   : null;
-
-if (!BOT_TOKEN) throw new Error('BOT_TOKEN is missing');
-if (!GOOGLE_PRIVATE_KEY) throw new Error('GOOGLE_PRIVATE_KEY is missing');
 
 /* ================== BOT ================== */
 const bot = new Telegraf(BOT_TOKEN);
