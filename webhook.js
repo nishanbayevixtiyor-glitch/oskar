@@ -1,3 +1,7 @@
+export default function handler(req, res) {
+  res.status(200).json({ ok: true, message: 'webhook alive' });
+}
+
 import { google } from 'googleapis';
 import fetch from 'node-fetch';
 import { Telegraf, Markup } from 'telegraf';
