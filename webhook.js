@@ -1,21 +1,23 @@
-export default function handler(req, res) {
-  res.status(200).json({ ok: true, message: 'webhook alive' });
-}
-
-import { google } from 'googleapis';
-import fetch from 'node-fetch';
 import { Telegraf, Markup } from 'telegraf';
+import { google } from 'googleapis';
 
+/* ================== ENV ================== */
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const GROUP_ID = process.env.GROUP_ID;
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 const SHEET_NAME = process.env.SHEET_NAME;
 const GOOGLE_CLIENT_EMAIL = process.env.GOOGLE_CLIENT_EMAIL;
-const GOOGLE_PRIVATE_KEY = process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n');
+const GOOGLE_PRIVATE_KEY = process.env.GOOGLE_PRIVATE_KEY
+  ? process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n')
+  : null;
 
+if (!BOT_TOKEN) throw new Error('BOT_TOKEN is missing');
+if (!GOOGLE_PRIVATE_KEY) throw new Error('GOOGLE_PRIVATE_KEY is missing');
+
+/* ================== BOT ================== */
 const bot = new Telegraf(BOT_TOKEN);
 
-// Google Sheets auth
+/* ================== GOOGLE SHEETS ================== */
 const auth = new google.auth.JWT(
   GOOGLE_CLIENT_EMAIL,
   null,
@@ -25,7 +27,6 @@ const auth = new google.auth.JWT(
 
 const sheets = google.sheets({ version: 'v4', auth });
 
-// Функция записи заявки в Google Sheets
 async function addRow(data) {
   await sheets.spreadsheets.values.append({
     spreadsheetId: SPREADSHEET_ID,
@@ -45,129 +46,140 @@ async function addRow(data) {
   });
 }
 
-// Хранилище состояния пользователей (для выбора меню)
+/* ================== SESSIONS ================== */
 const sessions = {};
 
-// Вспомогательные клавиатуры
-const mainKeyboard = Markup.keyboard([['Принтер', 'Компьютер', 'Другое']]).resize();
-const printerKeyboard = Markup.keyboard([['Замена картриджа', 'Не работает', 'Другое']]).resize();
+/* ================== KEYBOARDS ================== */
+const mainKeyboard = Markup.keyboard([
+  ['Принтер', 'Компьютер', 'Другое']
+]).resize();
 
+const printerKeyboard = Markup.keyboard([
+  ['Замена картриджа', 'Не работает', 'Другое']
+]).resize();
+
+/* ================== BOT LOGIC ================== */
 bot.start(async (ctx) => {
-  const chatId = ctx.chat.id;
-  if (!sessions[chatId]) sessions[chatId] = {};
-  
-  await ctx.reply('Привет! Нажмите СТАРТ', Markup.keyboard([['СТАРТ']]).resize());
+  const id = ctx.chat.id;
+  sessions[id] = {};
+  await ctx.reply(
+    'Привет! Нажмите СТАРТ',
+    Markup.keyboard([['СТАРТ']]).resize()
+  );
 });
 
 bot.hears('СТАРТ', async (ctx) => {
-  const chatId = ctx.chat.id;
-  sessions[chatId] = { step: 'ask_contact' };
-  await ctx.reply('Пожалуйста, поделитесь вашим номером:', Markup.keyboard([
-    Markup.button.contactRequest('Отправить номер')
-  ]).resize());
+  const id = ctx.chat.id;
+  sessions[id] = { step: 'contact' };
+
+  await ctx.reply(
+    'Пожалуйста, поделитесь вашим номером:',
+    Markup.keyboard([
+      Markup.button.contactRequest('Отправить номер')
+    ]).resize()
+  );
 });
 
 bot.on('contact', async (ctx) => {
-  const chatId = ctx.chat.id;
-  if (!sessions[chatId] || sessions[chatId].step !== 'ask_contact') return;
-  
-  sessions[chatId].phone = ctx.message.contact.phone_number;
-  sessions[chatId].sender = ctx.message.contact.first_name;
-  sessions[chatId].step = 'choose_type';
-  
+  const id = ctx.chat.id;
+  const s = sessions[id];
+  if (!s || s.step !== 'contact') return;
+
+  s.phone = ctx.message.contact.phone_number;
+  s.sender = ctx.message.contact.first_name;
+  s.step = 'type';
+
   await ctx.reply('Выберите тип устройства:', mainKeyboard);
 });
 
 bot.hears(['Принтер', 'Компьютер', 'Другое'], async (ctx) => {
-  const chatId = ctx.chat.id;
-  const session = sessions[chatId];
-  if (!session || !session.phone) return;
+  const id = ctx.chat.id;
+  const s = sessions[id];
+  if (!s || !s.phone) return;
 
-  session.type = ctx.message.text;
-  
-  if (session.type === 'Принтер') {
-    session.step = 'printer_service';
+  s.type = ctx.message.text;
+
+  if (s.type === 'Принтер') {
+    s.step = 'printer';
     await ctx.reply('Выберите услугу:', printerKeyboard);
   } else {
-    session.step = 'comment';
+    s.step = 'comment';
     await ctx.reply('Опишите проблему:');
   }
 });
 
 bot.hears(['Замена картриджа', 'Не работает', 'Другое'], async (ctx) => {
-  const chatId = ctx.chat.id;
-  const session = sessions[chatId];
-  if (!session || session.type !== 'Принтер') return;
+  const id = ctx.chat.id;
+  const s = sessions[id];
+  if (!s || s.type !== 'Принтер') return;
 
-  session.service = ctx.message.text;
+  s.service = ctx.message.text;
 
-  if (session.service === 'Замена картриджа') {
-    session.step = 'photo';
-    await ctx.reply('Пожалуйста, отправьте фото:');
-  } else if (session.service === 'Другое' || session.service === 'Не работает') {
-    session.step = 'comment';
-    await ctx.reply('Опишите проблему:');
+  if (s.service === 'Замена картриджа') {
+    s.step = 'photo';
+    await ctx.reply('Отправьте фото:');
   } else {
-    // если другая услуга — сразу отправляем
-    await sendToGroup(ctx, session);
+    s.step = 'comment';
+    await ctx.reply('Опишите проблему:');
   }
 });
 
 bot.on('photo', async (ctx) => {
-  const chatId = ctx.chat.id;
-  const session = sessions[chatId];
-  if (!session || session.step !== 'photo') return;
+  const id = ctx.chat.id;
+  const s = sessions[id];
+  if (!s || s.step !== 'photo') return;
 
-  // Берём самую крупную версию фото
-  const photo = ctx.message.photo[ctx.message.photo.length - 1];
-  session.photoFileId = photo.file_id;
-
-  await sendToGroup(ctx, session);
+  s.photo = ctx.message.photo.at(-1).file_id;
+  await sendResult(ctx, s);
 });
 
 bot.on('text', async (ctx) => {
-  const chatId = ctx.chat.id;
-  const session = sessions[chatId];
-  if (!session) return;
+  const id = ctx.chat.id;
+  const s = sessions[id];
+  if (!s || s.step !== 'comment') return;
 
-  if (session.step === 'comment') {
-    session.comment = ctx.message.text;
-    await sendToGroup(ctx, session);
-  }
+  s.comment = ctx.message.text;
+  await sendResult(ctx, s);
 });
 
-// Функция отправки заявки в группу и Google Sheets
-async function sendToGroup(ctx, session) {
+/* ================== SEND ================== */
+async function sendResult(ctx, s) {
   const time = new Date().toLocaleString('ru-RU', { hour12: false });
-  const message = `Отправитель: ${session.sender}\nТел.номер: ${session.phone}\nТип: ${session.type}\nУслуга: ${session.service || '—'}\nКомментарий: ${session.comment || '—'}\nВремя отправки: ${time}`;
 
-  if (session.photoFileId) {
-    await ctx.telegram.sendPhoto(GROUP_ID, session.photoFileId, { caption: message });
+  const text =
+`Отправитель: ${s.sender}
+Телефон: ${s.phone}
+Тип: ${s.type}
+Услуга: ${s.service || '—'}
+Комментарий: ${s.comment || '—'}
+Время: ${time}`;
+
+  if (s.photo) {
+    await ctx.telegram.sendPhoto(GROUP_ID, s.photo, { caption: text });
   } else {
-    await ctx.telegram.sendMessage(GROUP_ID, message);
+    await ctx.telegram.sendMessage(GROUP_ID, text);
   }
 
-  // Сохраняем в Google Sheets
   await addRow({
-    sender: session.sender,
-    phone: session.phone,
-    type: session.type,
-    service: session.service || session.comment || '—',
-    comment: session.comment,
+    sender: s.sender,
+    phone: s.phone,
+    type: s.type,
+    service: s.service || '—',
+    comment: s.comment,
     time,
     status: 'Новая'
   });
 
-  await ctx.reply('Заявка отправлена! Спасибо!');
+  await ctx.reply('Заявка отправлена ✅');
   delete sessions[ctx.chat.id];
 }
 
-// Vercel handler
+/* ================== VERCEL HANDLER ================== */
 export default async function handler(req, res) {
   if (req.method === 'POST') {
     await bot.handleUpdate(req.body);
-    res.status(200).send('OK');
-  } else {
-    res.status(200).send('Telegram bot is running');
+    return res.status(200).send('OK');
   }
+
+  res.status(200).json({ ok: true, message: 'Webhook alive' });
 }
